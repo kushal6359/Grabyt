@@ -169,7 +169,7 @@ function startDownload(job) {
         job.error = error.message;
     });
 
-    child.on("close", (code) => {
+    child.on("close", (code,signal) => {
         job.process = null;
 
         if (job.status === "cancelled") {
@@ -177,11 +177,16 @@ function startDownload(job) {
     return;
 }
 
-        if (code !== 0) {
-            job.status = "error";
-            job.error = stderr.trim() || `yt-dlp exited with code ${code}.`;
-            return;
-        }
+       if (code !== 0) {
+    job.status = "error";
+    job.error = stderr.trim() || `yt-dlp exited with code ${code}`;
+    console.error("yt-dlp download failed:", {
+        code,
+        signal,
+        stderr
+    });
+    return;
+}
 
         const files = fs
             .readdirSync(TEMP_DIR)
