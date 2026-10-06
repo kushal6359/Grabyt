@@ -1,29 +1,39 @@
-const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
+const { spawn } = require("child_process");
 const crypto = require("crypto");
 
 const TEMP_DIR = path.join(__dirname, "..", "temp");
-
-fs.mkdirSync(TEMP_DIR, { recursive: true });
+const YTDLP_PATH = "/usr/local/bin/yt-dlp";
 
 const jobs = new Map();
+
+if (!fs.existsSync(TEMP_DIR)) {
+    fs.mkdirSync(TEMP_DIR, { recursive: true });
+}
 
 function createJob(options) {
     const id = crypto.randomUUID();
 
     const job = {
         id,
-        status: "starting",
+        url: options.url,
+        type: options.type,
+        extension: options.extension,
+        height: options.height,
+        bitrate: options.bitrate,
+
+        status: "queued",
         progress: 0,
         speed: null,
         eta: null,
+
         filename: null,
         filePath: null,
         error: null,
+
         process: null,
-        createdAt: Date.now(),
-        ...options
+        createdAt: Date.now()
     };
 
     jobs.set(id, job);
@@ -35,23 +45,29 @@ function getJob(id) {
     return jobs.get(id);
 }
 
+function cleanupJobFiles(job) {
+    try {
+        const files = fs
+            .readdirSync(TEMP_DIR)
+            .filter((file) => file.startsWith(job.id + "."));
+
+        for (const file of files) {
+            try {
+                fs.unlinkSync(path.join(TEMP_DIR, file));
+            } catch {
+                // Ignore individual cleanup errors.
+            }
+        }
+    } catch {
+        // Ignore cleanup errors.
+    }
+}
+
 function startDownload(job) {
     const outputTemplate = path.join(
         TEMP_DIR,
         `${job.id}.%(ext)s`
     );
-
-    /*
-     * Use yt-dlp's format selector.
-     *
-     * MP4:
-     * Prefer MP4 video + M4A audio.
-     *
-     * WebM:
-     * Prefer WebM video + Opus audio.
-     *
-     * The height is limited using job.height.
-     */
 
     let format;
 
@@ -76,12 +92,11 @@ function startDownload(job) {
         "--newline",
         "--progress",
         "--progress-template",
-"%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s",
+        "%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s",
         "-f",
         format,
         "-o",
-        outputTemplate,
-        job.url
+        outputTemplate
     ];
 
     if (job.type === "video") {
@@ -95,98 +110,144 @@ function startDownload(job) {
         args.push(
             "--extract-audio",
             "--audio-format",
-            job.extension
+            job.extension,
+            "--audio-quality",
+            `${job.bitrate}K`
         );
-
-        if (job.bitrate) {
-            args.push(
-                "--audio-quality",
-                `${job.bitrate}K`
-            );
-        }
     }
+
+    args.push(job.url);
 
     job.status = "downloading";
 
-    const child = spawn(
-        "/data/data/com.termux/files/usr/bin/yt-dlp",
-        args
-    );
+    let child;
+
+    try {
+        child = spawn(YTDLP_PATH, args, {
+            cwd: TEMP_DIR,
+            env: process.env
+        });
+    } catch (error) {
+        job.status = "error";
+        job.error = `Failed to start yt-dlp: ${error.message}`;
+        return;
+    }
 
     job.process = child;
 
+    let stdout = "";
     let stderr = "";
+    let spawnError = null;
 
     child.stdout.on("data", (data) => {
-    const lines = data
-        .toString()
-        .split(/\r?\n/);
+        stdout += data.toString();
 
-    for (const line of lines) {
-        const match = line.match(
-            /^\s*(\d+(?:\.\d+)?)%\s*\|\s*(.*?)\s*\|\s*(.*?)\s*$/
-        );
+        const lines = data
+            .toString()
+            .split(/\r?\n/);
 
-        if (!match) {
-            continue;
-        }
-
-        const percent = Number(match[1]);
-        const speed = match[2];
-        const eta = match[3];
-
-        if (!Number.isNaN(percent)) {
-            job.progress = Math.max(
-                0,
-                Math.min(100, percent)
+        for (const line of lines) {
+            const match = line.match(
+                /^\s*(\d+(?:\.\d+)?)%\s*\|\s*(.*?)\s*\|\s*(.*?)\s*$/
             );
-        }
 
-        if (
-            speed &&
-            speed !== "Unknown B/s" &&
-            speed !== "N/A"
-        ) {
-            job.speed = speed;
-        }
+            if (!match) {
+                continue;
+            }
 
-        if (
-            eta &&
-            eta !== "NA" &&
-            eta !== "Unknown"
-        ) {
-            job.eta = eta;
+            const percent = Number(match[1]);
+            const speed = match[2];
+            const eta = match[3];
+
+            if (!Number.isNaN(percent)) {
+                job.progress = Math.max(
+                    0,
+                    Math.min(100, percent)
+                );
+            }
+
+            if (
+                speed &&
+                speed !== "Unknown B/s" &&
+                speed !== "N/A"
+            ) {
+                job.speed = speed;
+            }
+
+            if (
+                eta &&
+                eta !== "NA" &&
+                eta !== "Unknown"
+            ) {
+                job.eta = eta;
+            }
         }
-    }
-});
+    });
+
     child.stderr.on("data", (data) => {
         stderr += data.toString();
     });
 
     child.on("error", (error) => {
-        job.process = null;
-        job.status = "error";
-        job.error = error.message;
+        spawnError = error;
+
+        console.error(
+            "yt-dlp spawn error:",
+            error
+        );
+
+        if (job.status !== "cancelled") {
+            job.status = "error";
+            job.error =
+                `yt-dlp spawn error: ` +
+                `${error.code || "unknown"} - ` +
+                `${error.message}`;
+        }
     });
 
-    child.on("close", (code,signal) => {
+    child.on("close", (code, signal) => {
         job.process = null;
 
         if (job.status === "cancelled") {
-    cleanupJobFiles(job);
-    return;
-}
+            cleanupJobFiles(job);
+            return;
+        }
 
-       if (code !== 0) {
-    job.status = "error";
-    job.error = stderr.trim() || `yt-dlp exited with code ${code}`;
-    console.error("yt-dlp download failed:", {
-        code,
-        signal,
-        stderr
-    });
-    return;
-}
+        if (spawnError) {
+            job.status = "error";
+
+            job.error =
+                `yt-dlp spawn error: ` +
+                `${spawnError.code || "unknown"} - ` +
+                `${spawnError.message}`;
+
+            cleanupJobFiles(job);
+            return;
+        }
+
+        if (code !== 0) {
+            job.status = "error";
+
+            const details =
+                stderr.trim() ||
+                stdout.trim() ||
+                `yt-dlp exited with code ${code}, signal ${signal || "none"}`;
+
+            console.error(
+                "yt-dlp download failed:",
+                {
+                    code,
+                    signal,
+                    stderr,
+                    stdout
+                }
+            );
+
+            job.error = details;
+
+            cleanupJobFiles(job);
+            return;
+        }
 
         const files = fs
             .readdirSync(TEMP_DIR)
@@ -201,9 +262,6 @@ function startDownload(job) {
             return;
         }
 
-        /*
-         * Prefer the final requested extension.
-         */
         const preferred = files.find(
             (file) =>
                 file.endsWith(`.${job.extension}`)
@@ -213,55 +271,51 @@ function startDownload(job) {
             preferred || files[0];
 
         job.filename = selectedFile;
-
         job.filePath = path.join(
             TEMP_DIR,
             selectedFile
         );
 
         job.progress = 100;
+        job.speed = null;
+        job.eta = null;
         job.status = "completed";
     });
 }
-function cleanupJobFiles(job) {
-    if (!job || !job.id) {
-        return;
-    }
 
-    try {
-        const files = fs
-            .readdirSync(TEMP_DIR)
-            .filter((file) =>
-                file.startsWith(job.id + ".")
-            );
-
-        for (const file of files) {
-            try {
-                fs.unlinkSync(
-                    path.join(TEMP_DIR, file)
-                );
-            } catch {}
-        }
-    } catch {}
-}
 function cancelJob(id) {
     const job = jobs.get(id);
 
-    if (!job || !job.process) {
+    if (!job) {
+        return false;
+    }
+
+    if (
+        !job.process ||
+        job.status !== "downloading"
+    ) {
         return false;
     }
 
     job.status = "cancelled";
+    job.error = null;
 
     try {
         job.process.kill("SIGTERM");
-    } catch {}
+    } catch {
+        // Ignore kill errors.
+    }
 
     setTimeout(() => {
-        if (job.process) {
+        if (
+            job.process &&
+            !job.process.killed
+        ) {
             try {
                 job.process.kill("SIGKILL");
-            } catch {}
+            } catch {
+                // Ignore kill errors.
+            }
         }
     }, 3000);
 
@@ -270,19 +324,20 @@ function cancelJob(id) {
 
 function cleanupJobs() {
     const now = Date.now();
+    const maxAge = 10 * 60 * 1000;
 
-    for (const [id, job] of jobs) {
-        if (now - job.createdAt > 10 * 60 * 1000) {
-    cleanupJobFiles(job);
-    jobs.delete(id);
-     }
-   }
- }
+    for (const [id, job] of jobs.entries()) {
+        if (
+            now - job.createdAt > maxAge &&
+            job.status !== "downloading"
+        ) {
+            cleanupJobFiles(job);
+            jobs.delete(id);
+        }
+    }
+}
 
-setInterval(
-    cleanupJobs,
-    60 * 1000
-);
+setInterval(cleanupJobs, 60 * 1000);
 
 module.exports = {
     createJob,
