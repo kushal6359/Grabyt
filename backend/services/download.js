@@ -179,7 +179,7 @@ function startDownload(job) {
 
         if (code !== 0) {
             job.status = "error";
-            job.error = "Download failed.";
+            job.error = stderr.trim() || `yt-dlp exited with code ${code}.`;
             return;
         }
 
