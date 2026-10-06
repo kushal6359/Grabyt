@@ -210,7 +210,35 @@ function startDownload(job) {
 
         if (job.status === "cancelled") {
             cleanupJobFiles(job);
-            return;
+      if (code !== 0) {
+    job.status = "error";
+
+    if (stderr.includes("HTTP Error 429")) {
+        job.error =
+            "YouTube is temporarily rate-limiting the server. Please try again later.";
+    } else if (stderr.includes("HTTP Error 403")) {
+        job.error =
+            "YouTube refused this download request. Please try again later.";
+    } else {
+        job.error =
+            stderr.trim() ||
+            stdout.trim() ||
+            `yt-dlp exited with code ${code}, signal ${signal || "none"}`;
+    }
+
+    console.error(
+        "yt-dlp download failed:",
+        {
+            code,
+            signal,
+            stderr,
+            stdout
+        }
+    );
+
+    cleanupJobFiles(job);
+    return;
+}      return;
         }
 
         if (spawnError) {
@@ -225,29 +253,7 @@ function startDownload(job) {
             return;
         }
 
-        if (code !== 0) {
-            job.status = "error";
 
-            const details =
-                stderr.trim() ||
-                stdout.trim() ||
-                `yt-dlp exited with code ${code}, signal ${signal || "none"}`;
-
-            console.error(
-                "yt-dlp download failed:",
-                {
-                    code,
-                    signal,
-                    stderr,
-                    stdout
-                }
-            );
-
-            job.error = details;
-
-            cleanupJobFiles(job);
-            return;
-        }
 
         const files = fs
             .readdirSync(TEMP_DIR)
