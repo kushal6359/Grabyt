@@ -88,17 +88,18 @@ function startDownload(job) {
     }
 
     const args = [
-        "--no-playlist",
-        "--newline",
-        "--progress",
-        "--progress-template",
-        "%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s",
-        "-f",
-        format,
-        "-o",
-        outputTemplate
-    ];
-
+    "--no-playlist",
+    "--newline",
+    "--progress",
+    "--progress-template",
+    "%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s",
+    "--extractor-args",
+    "youtube:player-client=mweb",
+    "-f",
+    format,
+    "-o",
+    outputTemplate
+];
     if (job.type === "video") {
         args.push(
             "--merge-output-format",

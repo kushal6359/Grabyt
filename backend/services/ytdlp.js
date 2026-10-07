@@ -3,15 +3,16 @@ const { spawn } = require("child_process");
 function getVideoInfo(url) {
     return new Promise((resolve, reject) => {
         const args = [
-            "--dump-single-json",
-            "--no-playlist",
-            "--no-warnings",
-            "--skip-download",
-            "--js-runtimes",
-            "deno",
-            url
-        ];
-
+    "--dump-single-json",
+    "--no-playlist",
+    "--no-warnings",
+    "--skip-download",
+    "--js-runtimes",
+    "deno",
+    "--extractor-args",
+    "youtube:player-client=mweb",
+    url
+];
         const YTDLP_PATH = process.env.YTDLP_PATH || "yt-dlp";
         const childProcess = spawn(YTDLP_PATH, args);
 
