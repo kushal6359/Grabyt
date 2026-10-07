@@ -4,7 +4,7 @@ const { spawn } = require("child_process");
 const crypto = require("crypto");
 
 const TEMP_DIR = path.join(__dirname, "..", "temp");
-const YTDLP_PATH = "/usr/local/bin/yt-dlp";
+const YTDLP_PATH = process.env.YTDLP_PATH || "yt-dlp";
 
 const jobs = new Map();
 
@@ -206,87 +206,76 @@ function startDownload(job) {
     });
 
     child.on("close", (code, signal) => {
-        job.process = null;
+    job.process = null;
 
-        if (job.status === "cancelled") {
-            cleanupJobFiles(job);
-      if (code !== 0) {
-    job.status = "error";
-
-    if (stderr.includes("HTTP Error 429")) {
-        job.error =
-            "YouTube is temporarily rate-limiting the server. Please try again later.";
-    } else if (stderr.includes("HTTP Error 403")) {
-        job.error =
-            "YouTube refused this download request. Please try again later.";
-    } else {
-        job.error =
-            stderr.trim() ||
-            stdout.trim() ||
-            `yt-dlp exited with code ${code}, signal ${signal || "none"}`;
+    if (job.status === "cancelled") {
+        cleanupJobFiles(job);
+        return;
     }
 
-    console.error(
-        "yt-dlp download failed:",
-        {
+    if (spawnError) {
+        job.status = "error";
+        job.error =
+            `yt-dlp spawn error: ` +
+            `${spawnError.code || "unknown"} - ` +
+            `${spawnError.message}`;
+
+        cleanupJobFiles(job);
+        return;
+    }
+
+    if (code !== 0) {
+        job.status = "error";
+
+        if (stderr.includes("HTTP Error 429")) {
+            job.error =
+                "YouTube is temporarily rate-limiting the server. Please try again later.";
+        } else if (stderr.includes("HTTP Error 403")) {
+            job.error =
+                "YouTube refused this download request. Please try again later.";
+        } else {
+            job.error =
+                stderr.trim() ||
+                stdout.trim() ||
+                `yt-dlp exited with code ${code}, signal ${signal || "none"}`;
+        }
+
+        console.error("yt-dlp download failed:", {
             code,
             signal,
             stderr,
             stdout
-        }
+        });
+
+        cleanupJobFiles(job);
+        return;
+    }
+
+    const files = fs
+        .readdirSync(TEMP_DIR)
+        .filter((file) => file.startsWith(job.id + "."));
+
+    if (files.length === 0) {
+        job.status = "error";
+        job.error =
+            "Download completed but output file was not found.";
+        return;
+    }
+
+    const preferred = files.find(
+        (file) => file.endsWith(`.${job.extension}`)
     );
 
-    cleanupJobFiles(job);
-    return;
-}      return;
-        }
+    const selectedFile = preferred || files[0];
 
-        if (spawnError) {
-            job.status = "error";
+    job.filename = selectedFile;
+    job.filePath = path.join(TEMP_DIR, selectedFile);
 
-            job.error =
-                `yt-dlp spawn error: ` +
-                `${spawnError.code || "unknown"} - ` +
-                `${spawnError.message}`;
-
-            cleanupJobFiles(job);
-            return;
-        }
-
-
-
-        const files = fs
-            .readdirSync(TEMP_DIR)
-            .filter((file) =>
-                file.startsWith(job.id + ".")
-            );
-
-        if (files.length === 0) {
-            job.status = "error";
-            job.error =
-                "Download completed but output file was not found.";
-            return;
-        }
-
-        const preferred = files.find(
-            (file) =>
-                file.endsWith(`.${job.extension}`)
-        );
-
-        const selectedFile =
-            preferred || files[0];
-
-        job.filename = selectedFile;
-        job.filePath = path.join(
-            TEMP_DIR,
-            selectedFile
-        );
-
-        job.progress = 100;
-        job.speed = null;
-        job.eta = null;
-        job.status = "completed";
-    });
+    job.progress = 100;
+    job.speed = null;
+    job.eta = null;
+    job.status = "completed";
+});
 }
 
 function cancelJob(id) {

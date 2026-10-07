@@ -7,31 +7,37 @@ function getVideoInfo(url) {
             "--no-playlist",
             "--no-warnings",
             "--skip-download",
+            "--js-runtimes",
+            "deno",
             url
         ];
 
-        const process = spawn("yt-dlp", args);
+        const YTDLP_PATH = process.env.YTDLP_PATH || "yt-dlp";
+        const childProcess = spawn(YTDLP_PATH, args);
 
         let stdout = "";
         let stderr = "";
 
-        process.stdout.on("data", (data) => {
+        childProcess.stdout.on("data", (data) => {
             stdout += data.toString();
         });
 
-        process.stderr.on("data", (data) => {
+        childProcess.stderr.on("data", (data) => {
             stderr += data.toString();
         });
 
-        process.on("error", (error) => {
+        childProcess.on("error", (error) => {
             reject(error);
         });
 
-        process.on("close", (code) => {
+        childProcess.on("close", (code) => {
             if (code !== 0) {
+                console.error("yt-dlp metadata error:", stderr);
+
                 reject(
                     new Error(
-                        stderr.trim() || "yt-dlp failed to retrieve video information."
+                        stderr.trim() ||
+                        "yt-dlp failed to retrieve video information."
                     )
                 );
                 return;
@@ -40,8 +46,12 @@ function getVideoInfo(url) {
             try {
                 const info = JSON.parse(stdout);
                 resolve(info);
-            } catch {
-                reject(new Error("yt-dlp returned invalid metadata."));
+            } catch (error) {
+                console.error("Invalid yt-dlp JSON:", error.message);
+
+                reject(
+                    new Error("yt-dlp returned invalid metadata.")
+                );
             }
         });
     });
