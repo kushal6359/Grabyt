@@ -13,7 +13,6 @@ function runJson(url, profile) {
         const args = baseArgs(profile).concat([
             "--dump-single-json",
             "--skip-download",
-            "--no-warnings",
             url
         ]);
 
