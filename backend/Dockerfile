@@ -1,8 +1,8 @@
 FROM node:22-bookworm
 
 RUN apt-get update \
-    && apt-get install -y ffmpeg python3 python3-pip curl unzip \
-    RUN python3 -m pip install -U --pre "yt-dlp[default]"
+    && apt-get install -y ffmpeg python3 python3-pip curl \
+    && python3 -m pip install --break-system-packages -U --pre "yt-dlp[default]" \
     && curl -fsSL https://deno.land/install.sh | sh \
     && ln -s /root/.deno/bin/deno /usr/local/bin/deno \
     && apt-get clean \
